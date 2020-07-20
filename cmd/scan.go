@@ -75,7 +75,7 @@ func crlfMapFunc(cmd *cobra.Command, args []string) {
 
     payloadsFile := fileReader(payloads)
     domainsFile := fileReader(domains)
-    progressBar := pb.New(len(domainsFile))
+    progressBar := pb.New(len(domainsFile) * len(payloadsFile))
 
     for _, domain := range domainsFile {
       for _, payload := range payloadsFile {
