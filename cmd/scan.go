@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+  "net/url"
 	"sync"
   "strings"
   "time"
@@ -17,6 +18,7 @@ import (
 
 var domains string
 var payloads string
+var output string
 var userAgent string
 var timeout int
 var threads int
@@ -33,6 +35,7 @@ func crlfMapCmd() *cobra.Command {
 
   crlfMapCmd.Flags().StringVarP(&domains, "domains", "d", "", "Location of domains with parameters to scan")
   crlfMapCmd.Flags().StringVarP(&payloads, "payloads", "p", "payloads.txt", "Location of payloads to generate on requests")
+  crlfMapCmd.Flags().StringVarP(&output, "output", "o", "", "Location to save results")
   crlfMapCmd.Flags().StringVarP(&userAgent, "user-agent", "u", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.138 Safari/537.36", "User agent for requests")
   crlfMapCmd.Flags().IntVarP(&timeout, "timeout", "", 10, "The amount of time needed to close a connection that could be hung")
   crlfMapCmd.Flags().IntVarP(&delay, "delay", "", 0, "The time each threads waits between requests in milliseconds")
@@ -62,11 +65,12 @@ func crlfMapFunc(cmd *cobra.Command, args []string) {
 :: Domains    : %s
 :: Payloads   : %s
 :: Threads    : %d
+:: Output     : %s
 :: User Agent : %s
 :: Timeout    : %d
 :: Delay      : %d
 -----------------------
-`, version, domains, payloads, threads, userAgent, timeout, delay)
+`, version, domains, payloads, threads, output, userAgent, timeout, delay)
 
     if threads <= 0 {
       fmt.Println("Threads must be larger than 0")
@@ -137,7 +141,43 @@ func fuzzURL(domain string, payload string) *[]string {
       fuzzedURL = append(fuzzedURL,flattenedURL)
     }
   }
+
+  //Fuzz endpoints.  Keeping this seperated from parameters.  Maybe add flags for types of fuzzing later?
+  u, err := url.Parse(domain)
+  if err != nil {
+    panic(err)
+  }
+
+  endpoint := u.Path
+  scheme := u.Scheme
+  host := u.Host
+
+  for endpointPayloadCount := 0; endpointPayloadCount < strings.Count(endpoint, "/"); endpointPayloadCount++ {
+    finalEndpoint := replaceNth(endpoint, "/", "/"+payload, endpointPayloadCount+1)
+    finalEndpointUrl := []string{scheme,"://", host, finalEndpoint}
+    flattenedURL := strings.Join(finalEndpointUrl, "")
+    fuzzedURL = append(fuzzedURL,flattenedURL)
+  }
+
   return &fuzzedURL
+}
+
+
+// Thanks stackoverflow
+func replaceNth(s, old, new string, n int) string {
+    i := 0
+    for m := 1; m <= n; m++ {
+        x := strings.Index(s[i:], old)
+        if x < 0 {
+            break
+        }
+        i += x
+        if m == n {
+            return s[:i] + new + s[i+len(old):]
+        }
+        i += len(old)
+    }
+    return s
 }
 
 func fileReader(ulist string) []string {
@@ -178,7 +218,20 @@ func makeRequest(uri string, timeoutFlag int, wg *sync.WaitGroup) {
       },
     }}
 
-	resp, err := client.Get(URL)
+	req, err := http.NewRequest("GET", URL, nil)
+  if err != nil {
+    if verbose == true {
+      fmt.Println(err)
+    }
+    return
+  }
+  req.Header.Set("User-Agent",userAgent)
+
+  resp, err := client.Do(req)
+  if err != nil {
+    fmt.Println(err)
+  }
+
 
 	if err != nil {
     if verbose == true {
@@ -194,9 +247,17 @@ func makeRequest(uri string, timeoutFlag int, wg *sync.WaitGroup) {
 
 	for key := range resp.Header {
 		if key == "Injected-Header" {
+      if output != "" {
+        f, err := os.OpenFile(output, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+        if err != nil {
+          if verbose == true {
+            fmt.Println(err)
+          }
+        }
+        f.WriteString(URL+"\n");
+      }
 			fmt.Println("[+]" + URL + ": is Vulnerable")
 		}
-
 	}
 }
 
