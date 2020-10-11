@@ -10,10 +10,12 @@ import (
 	"sync"
   "strings"
   "time"
+  "errors"
+  "bytes"
+  "encoding/json"
   "crypto/tls"
 
   "github.com/spf13/cobra"
-  "github.com/cheggaaa/pb/v3"
 )
 
 var domains string
@@ -24,7 +26,12 @@ var timeout int
 var threads int
 var delay int
 var verbose bool
+var slackHook string
 var version = "v0.0.1"
+
+type SlackRequestBody struct {
+    Text string `json:"text"`
+}
 
 func crlfMapCmd() *cobra.Command {
   crlfMapCmd := &cobra.Command {
@@ -41,6 +48,7 @@ func crlfMapCmd() *cobra.Command {
   crlfMapCmd.Flags().IntVarP(&delay, "delay", "", 0, "The time each threads waits between requests in milliseconds")
   crlfMapCmd.Flags().IntVarP(&threads, "threads", "t", 1, "Number of threads to run crlfmap on")
   crlfMapCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
+  crlfMapCmd.Flags().StringVarP(&slackHook, "slack-webhook", "s", "",  "Slack webhook to send findings to a channel")
 
   crlfMapCmd.MarkFlagRequired("domains")
 
@@ -69,8 +77,9 @@ func crlfMapFunc(cmd *cobra.Command, args []string) {
 :: User Agent : %s
 :: Timeout    : %d
 :: Delay      : %d
+:: Slack Hook : %s
 -----------------------
-`, version, domains, payloads, threads, output, userAgent, timeout, delay)
+`, version, domains, payloads, threads, output, userAgent, timeout, delay, slackHook)
 
     if threads <= 0 {
       fmt.Println("Threads must be larger than 0")
@@ -79,7 +88,6 @@ func crlfMapFunc(cmd *cobra.Command, args []string) {
 
     payloadsFile := fileReader(payloads)
     domainsFile := fileReader(domains)
-    progressBar := pb.New(len(domainsFile) * len(payloadsFile))
 
     for _, domain := range domainsFile {
       for _, payload := range payloadsFile {
@@ -88,11 +96,7 @@ func crlfMapFunc(cmd *cobra.Command, args []string) {
 
         for ithreads := 0; ithreads < threads; ithreads++ {
           for _, requestURI := range *fuzzedURL {
-            if verbose == false {
-              progressBar.Start()
-            }
             wg.Add(1)
-            progressBar.Increment()
             go makeRequest(requestURI, timeout, &wg)
             if delay > 0 {
               time.Sleep(time.Duration(delay) * time.Millisecond)
@@ -103,7 +107,6 @@ func crlfMapFunc(cmd *cobra.Command, args []string) {
         wg.Wait()
     }
   }
-  progressBar.Finish()
 }
 
 func fuzzURL(domain string, payload string) *[]string {
@@ -178,6 +181,31 @@ func replaceNth(s, old, new string, n int) string {
         i += len(old)
     }
     return s
+}
+
+// Thanks golangcode.com
+func SendSlackNotification(slackHook string, msg string) error {
+
+    slackBody, _ := json.Marshal(SlackRequestBody{Text: msg})
+    req, err := http.NewRequest(http.MethodPost, slackHook, bytes.NewBuffer(slackBody))
+    if err != nil {
+        return err
+    }
+
+    req.Header.Add("Content-Type", "application/json")
+
+    client := &http.Client{Timeout: 10 * time.Second}
+    resp, err := client.Do(req)
+    if err != nil {
+        return err
+    }
+
+    buf := new(bytes.Buffer)
+    buf.ReadFrom(resp.Body)
+    if buf.String() != "ok" {
+        return errors.New("Non-ok response returned from Slack")
+    }
+    return nil
 }
 
 func fileReader(ulist string) []string {
@@ -257,6 +285,9 @@ func makeRequest(uri string, timeoutFlag int, wg *sync.WaitGroup) {
         f.WriteString(URL+"\n");
       }
 			fmt.Println("[+]" + URL + ": is Vulnerable")
+      if slackHook != "" {
+        SendSlackNotification(slackHook, URL + ": is vulnerable")
+      }
 		}
 	}
 }
