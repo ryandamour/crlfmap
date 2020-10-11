@@ -25,7 +25,7 @@ Flags:
 ## `scan` usage
 
 ```bash
-crlfmap scan --domains domains.txt --output results.txt
+crlfmap scan --domains domains.txt --output results.txt --slack-webhook "https://hooks.slack.com/services/XXX/YYYZZZ"
 
 ===============================================================
 CRLFMap v0.0.1
